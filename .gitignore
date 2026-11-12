@@ -1,0 +1,17 @@
+# Large local datasets and generated binary data
+*.nc
+*.nc4
+*.rda
+*.RData
+*.rds
+data/external/*
+!data/external/README.md
+
+# Local Python and editor files
+__pycache__/
+*.py[cod]
+.venv/
+.vscode/
+*.tmp
+*.TMP
+*Zone.Identifier*
