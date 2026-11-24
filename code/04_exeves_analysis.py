@@ -1,10 +1,9 @@
 """
 ExEvEs + peak-precipitation analysis.
 
-Three scenarios:
-  S1: GLEAM + MSWEP, 1980–2020 (full overlap — replicates raw analysis)
-  S2: GLEAM + MSWEP, 2001–2020 (tests signal persistence with shorter period)
-  S3: FLUXCOM + MSWEP, 2001–2020 (tests alternative ET product)
+Two scenarios:
+  GLEAM + MSWEP, 2001–2020
+  FLUXCOM + MSWEP, 2001–2020
 
 Four output figures (one per plot type, all scenarios overlaid/side-by-side):
   exeves_q95_density.png   – density of % q95 days during ExEvEs per cell
@@ -12,6 +11,8 @@ Four output figures (one per plot type, all scenarios overlaid/side-by-side):
   exeves_pct_density.png   – density of % ExEvE days out of all days per cell
   exeves_lag.png           – standardised timing of q95 relative to ExEvEs
 """
+from _paths import input_path, output_path
+from _alignment import validate_alignment
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -20,13 +21,13 @@ from scipy.stats import gaussian_kde
 import warnings; warnings.filterwarnings('ignore')
 
 GLEAM_FILE   = "gleam_e_mm_med_198001_202412_025_daily.nc"
-FLUXCOM_FILE = "ET_2001_2021_025_daily_med.nc"
+FLUXCOM_FILE = "ET_2001_2020_025_daily_med.nc"
 MSWEP_FILE   = "mswep-v2-8_tp_mm_med_197901_202012_025_daily.nc"
 
 LAGS       = [-3, -2, -1, 0, 1, 2, 3]
 LAG_LABELS = ["-3", "-2", "-1", "ExEvEs", "+1", "+2", "+3"]
-SC_LABELS  = ["GLEAM\n1980–2020", "GLEAM\n2001–2020", "FLUXCOM\n2001–2020"]
-SC_COLORS  = ["steelblue", "seagreen", "darkorange"]
+SC_LABELS  = ["GLEAM\n2001–2020", "FLUXCOM\n2001–2020"]
+SC_COLORS  = ["seagreen", "darkorange"]
 
 
 # ── Algorithm functions ───────────────────────────────────────────────────────
@@ -73,7 +74,7 @@ def detect_exeves(et, times_pd):
 
 
 def make_q95_threshold(precip, min_q95=0.1):
-    """Per-cell q95 from full precip record. Returns (nlat,nlon) and valid mask."""
+    """Per-cell q95 from the supplied precipitation period and valid mask."""
     q95v  = np.nanpercentile(precip, 95, axis=0)
     return q95v, q95v > min_q95
 
@@ -154,7 +155,7 @@ def lag_profile(exeve, q95m, valid):
 # ── Load data ─────────────────────────────────────────────────────────────────
 
 print("Loading FLUXCOM (land mask + ET) ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE)
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE)).sel(time=slice("2001-01-01", "2020-12-31"))
 land_2d  = fc_ds["land_fraction"].values >= 0.5
 ref_lat  = fc_ds.lat.values
 ref_lon  = fc_ds.lon.values
@@ -163,17 +164,17 @@ fc_times = pd.DatetimeIndex(fc_ds.time.values)
 print(f"  FLUXCOM period: {fc_times[0].date()} → {fc_times[-1].date()}")
 
 print("Loading MSWEP ...")
-ms_ds    = xr.open_dataset(MSWEP_FILE)
+ms_ds    = xr.open_dataset(input_path(MSWEP_FILE)).sel(time=slice("2001-01-01", "2020-12-31"))
 ms_np    = ms_ds["mask"].values.astype(np.float32)
 ms_times = pd.DatetimeIndex(ms_ds.time.values)
 print(f"  MSWEP period: {ms_times[0].date()} → {ms_times[-1].date()}")
 
-# q95 threshold computed on full MSWEP record (fixed across all scenarios)
+# q95 threshold computed on the analysis period (fixed across both scenarios)
 q95_vals, q95_valid = make_q95_threshold(ms_np)
 valid_base = q95_valid & land_2d
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE)).sel(time=slice("2001-01-01", "2020-12-31"))
 gl_np    = gl_ds["E"].values.astype(np.float32)
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 print(f"  GLEAM period: {gl_times[0].date()} → {gl_times[-1].date()}")
@@ -184,23 +185,15 @@ print(f"  GLEAM period: {gl_times[0].date()} → {gl_times[-1].date()}")
 def tidx(times, t0, t1):
     return np.where((times >= pd.Timestamp(t0)) & (times <= pd.Timestamp(t1)))[0]
 
-ms_end = str(ms_times[-1].date())   # 2020-12-31
-
-gl_s1 = tidx(gl_times, "1980-01-01", ms_end)
-gl_s2 = tidx(gl_times, "2001-01-01", ms_end)
-fc_s3 = tidx(fc_times, "2001-01-01", ms_end)
-ms_s1 = tidx(ms_times, "1980-01-01", ms_end)
-ms_s2 = tidx(ms_times, "2001-01-01", ms_end)
-
-print(f"\nS1 days — GLEAM: {len(gl_s1)}, MSWEP: {len(ms_s1)}")
-print(f"S2 days — GLEAM: {len(gl_s2)}, MSWEP: {len(ms_s2)}")
-print(f"S3 days — FLUXCOM: {len(fc_s3)}, MSWEP: {len(ms_s2)}")
+gl_s2 = tidx(gl_times, "2001-01-01", "2020-12-31")
+fc_s3 = tidx(fc_times, "2001-01-01", "2020-12-31")
+ms_s2 = tidx(ms_times, "2001-01-01", "2020-12-31")
+validate_alignment(gl_ds, fc_ds, ms_ds)
 
 
 # ── Run all scenarios ─────────────────────────────────────────────────────────
 
 scenarios = [
-    ("S1: GLEAM 1980–2020",   gl_np,    gl_times, gl_s1, ms_s1),
     ("S2: GLEAM 2001–2020",   gl_np,    gl_times, gl_s2, ms_s2),
     ("S3: FLUXCOM 2001–2020", fc_et_np, fc_times, fc_s3, ms_s2),
 ]
@@ -294,14 +287,14 @@ density_panel(ax1,
               "% of q95 days falling during ExEvEs (per land cell)",
               "Percentage (%)")
 fig1.tight_layout()
-fig1.savefig("exeves_q95_density.png", dpi=150, bbox_inches="tight")
+fig1.savefig(output_path("exeves_q95_density.png"), dpi=150, bbox_inches="tight")
 print("\nSaved exeves_q95_density.png")
 
 # ── Figure 2: spatial maps ────────────────────────────────────────────────────
 all_q95 = np.concatenate([r["pct_q95"][np.isfinite(r["pct_q95"])] for r in results])
 vmax2   = np.nanpercentile(all_q95, 97)
 
-fig2, axes2 = plt.subplots(3, 1, figsize=(10, 12))
+fig2, axes2 = plt.subplots(2, 1, figsize=(10, 8))
 for ax, r, slabel in zip(axes2, results, SC_LABELS):
     map_panel(ax, r["pct_q95"], ref_lat, ref_lon,
               f"% q95 days during ExEvEs — {slabel.replace(chr(10), ' ')}",
@@ -309,7 +302,7 @@ for ax, r, slabel in zip(axes2, results, SC_LABELS):
 fig2.suptitle("Spatial distribution of q95 precipitation during ExEvEs",
               fontsize=12, fontweight="bold")
 fig2.tight_layout()
-fig2.savefig("exeves_q95_map.png", dpi=150, bbox_inches="tight")
+fig2.savefig(output_path("exeves_q95_map.png"), dpi=150, bbox_inches="tight")
 print("Saved exeves_q95_map.png")
 
 # ── Figure 3: density of ExEvE % of all days ─────────────────────────────────
@@ -320,18 +313,18 @@ density_panel(ax3,
               "ExEvEs as % of all days (per land cell)",
               "Percentage (%)", xlim=(0, 30))
 fig3.tight_layout()
-fig3.savefig("exeves_pct_density.png", dpi=150, bbox_inches="tight")
+fig3.savefig(output_path("exeves_pct_density.png"), dpi=150, bbox_inches="tight")
 print("Saved exeves_pct_density.png")
 
 # ── Figure 4: lag bar charts ──────────────────────────────────────────────────
-fig4, axes4 = plt.subplots(1, 3, figsize=(16, 5), sharey=True)
+fig4, axes4 = plt.subplots(1, 2, figsize=(11, 5), sharey=True)
 for ax, r, slabel, color in zip(axes4, results, SC_LABELS, SC_COLORS):
     lag_panel(ax, r["profile"], r["baseline"], color,
               f"Timing of q95 relative to ExEvEs\n{slabel.replace(chr(10), ' ')}")
 fig4.suptitle("Standardised timing of peak precipitation relative to ExEvEs",
               fontsize=12, fontweight="bold")
 fig4.tight_layout()
-fig4.savefig("exeves_lag.png", dpi=150, bbox_inches="tight")
+fig4.savefig(output_path("exeves_lag.png"), dpi=150, bbox_inches="tight")
 print("Saved exeves_lag.png")
 
 print("\nAll done.")

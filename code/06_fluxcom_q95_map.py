@@ -1,10 +1,12 @@
+from _paths import input_path, output_path
+from _alignment import validate_alignment
 import numpy as np
 import xarray as xr
 import pandas as pd
 import matplotlib.pyplot as plt
 import warnings; warnings.filterwarnings('ignore')
 
-FLUXCOM_FILE = "ET_2001_2021_025_daily_med.nc"
+FLUXCOM_FILE = "ET_2001_2020_025_daily_med.nc"
 MSWEP_FILE   = "mswep-v2-8_tp_mm_med_197901_202012_025_daily.nc"
 
 
@@ -39,20 +41,21 @@ def detect_exeves(et, times_pd):
 
 
 print("Loading ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE)
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE))
 land_2d  = fc_ds["land_fraction"].values >= 0.5
 ref_lat  = fc_ds.lat.values
 ref_lon  = fc_ds.lon.values
 fc_et    = (fc_ds["ET"].values * 24).astype(np.float32)
 fc_times = pd.DatetimeIndex(fc_ds.time.values)
 
-ms_ds    = xr.open_dataset(MSWEP_FILE)
+ms_ds    = xr.open_dataset(input_path(MSWEP_FILE))
 ms_np    = ms_ds["mask"].values.astype(np.float32)
 ms_times = pd.DatetimeIndex(ms_ds.time.values)
 
 t0, t1 = "2001-01-01", "2020-12-31"
 fc_idx = np.where((fc_times >= pd.Timestamp(t0)) & (fc_times <= pd.Timestamp(t1)))[0]
 ms_idx = np.where((ms_times >= pd.Timestamp(t0)) & (ms_times <= pd.Timestamp(t1)))[0]
+validate_alignment(fc_ds.isel(time=fc_idx), ms_ds.isel(time=ms_idx))
 
 fc_sub = fc_et[fc_idx]
 ms_sub = ms_np[ms_idx]
@@ -61,7 +64,7 @@ t_pd   = pd.DatetimeIndex(fc_times[fc_idx])
 print("Detecting FLUXCOM ExEvEs ...")
 exeve = detect_exeves(fc_sub, t_pd)
 
-q95_vals = np.nanpercentile(ms_np, 95, axis=0)
+q95_vals = np.nanpercentile(ms_sub, 95, axis=0)
 q95_valid = q95_vals > 0.1
 q95m  = ms_sub >= q95_vals[np.newaxis]
 
@@ -101,5 +104,5 @@ ax_den.set_xlim(0, 100)
 ax_den.grid(axis="y", alpha=0.3)
 
 fig.tight_layout()
-fig.savefig("fluxcom_q95_map.png", dpi=150, bbox_inches="tight")
+fig.savefig(output_path("fluxcom_q95_map.png"), dpi=150, bbox_inches="tight")
 print("Saved fluxcom_q95_map.png")

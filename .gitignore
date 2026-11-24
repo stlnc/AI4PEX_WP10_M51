@@ -9,6 +9,7 @@ data/external/*
 
 # Local Python and editor files
 __pycache__/
+.pytest_cache/
 *.py[cod]
 .venv/
 .vscode/

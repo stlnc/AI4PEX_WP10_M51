@@ -3,6 +3,10 @@ Spatial maps of % q95 days during ExEvEs — 3 panels (scenarios), 6 LC types
 each in a distinct colormap with its own colorbar.
 Output: exeves_europe_q95_map_lc.png
 """
+from _analysis import pentad_zscore, detect_exeves
+from _alignment import validate_alignment
+from _figure_style import EUROPE_LAND_COVER_COLORS
+from _paths import input_path, output_path
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -11,56 +15,26 @@ import matplotlib.colors as mcolors
 import pyreadr
 import warnings; warnings.filterwarnings('ignore')
 
-GLEAM_FILE   = "gleam_e_mm_land_198001_202412_025_daily.nc"
+GLEAM_FILE   = "gleam_e_mm_eur_2001_2020_025_daily.nc"
 FLUXCOM_FILE = "ET_2001_2020_025_daily_eur.nc"
-MSWEP_FILE   = "mswep-v2-8_tp_mm_land_197901_202012_025_daily.nc"
+MSWEP_FILE   = "mswep-v2-8_tp_mm_eur_2001_2020_025_daily.nc"
 MASKS_FILE   = "masks.rda"
 
 LC_TYPES   = ["Forests", "Croplands", "Savannas", "Grasslands", "Shrublands", "Barren"]
-LC_COLORS  = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#D55E00", "#CC79A7"]
+LC_COLORS  = list(EUROPE_LAND_COVER_COLORS)
 
-SC_KEYS   = ['S1', 'S2', 'S3']
-SC_LABELS = ["GLEAM 1980–2020", "GLEAM 2001–2020", "FLUXCOM 2001–2020"]
+SC_KEYS   = ['S2', 'S3']
+SC_LABELS = ["GLEAM 2001–2020", "FLUXCOM 2001–2020"]
 SEASON_MONTHS = [4, 5, 6, 7, 8, 9, 10]  # April-October
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
 
-def pentad_zscore(et, times_pd):
-    T, N = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any(): continue
-        v = et[idx]
-        mu = np.nanmean(v, axis=0); sg = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
-
-
-def detect_exeves(et, times_pd):
-    T, N = et.shape
-    z    = pentad_zscore(et, times_pd)
-    z80  = np.nanpercentile(z, 80, axis=0)
-    z95  = np.nanpercentile(z, 95, axis=0)
-    above = z >= z80; extreme = z >= z95
-    del z  # large float32 array no longer needed
-    out = np.zeros((T, N), dtype=bool)
-    for j in range(N):
-        if not above[:, j].any(): continue
-        d  = np.diff(above[:, j].astype(np.int8), prepend=0, append=0)
-        ss = np.where(d ==  1)[0]; es = np.where(d == -1)[0]
-        for s, e in zip(ss, es):
-            if (e - s) >= 2 and extreme[s:e, j].any():
-                out[s:e, j] = True
-    return out
-
 
 # ── Load masks ────────────────────────────────────────────────────────────────
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 eur = masks[
     masks['ipcc_continent'].isin(['EUROPE', 'EUROPE-AFRICA']) &
     (masks['land_mask'] == 'land') &
@@ -80,24 +54,24 @@ lat_min = eur.lat.min() - 0.5;  lat_max = eur.lat.max() + 0.5
 lon_min = eur.lon.min() - 0.5;  lon_max = eur.lon.max() + 0.5
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_ref   = gl_ds['E'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
 eur_lats = gl_ref.lat.values
 eur_lons = gl_ref.lon.values
-gl_s1_da = select_period_apr_oct(gl_ref, '1980-01-01', '2020-12-31')
+gl_s1_da = select_period_apr_oct(gl_ref, '2001-01-01', '2020-12-31')
 gl_s1    = gl_s1_da.values.astype(np.float32)
 t_s1     = pd.DatetimeIndex(gl_s1_da.time.values)
 gl_ds.close()
 
 print("Loading MSWEP ...")
-ms_ds    = xr.open_dataset(MSWEP_FILE)
-ms_eur   = ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
+ms_ds    = xr.open_dataset(input_path(MSWEP_FILE))
+ms_eur   = ms_ds['mask'].sel(time=slice('2001-01-01', '2020-12-31'), lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
 ms_full  = ms_eur.where(ms_eur.time.dt.month.isin(SEASON_MONTHS), drop=True).values.astype(np.float32)
 ms_full[ms_full <= 0] = np.nan  # wet-day-only threshold basis (>0 mm/day)
 q95_grid  = np.nanpercentile(ms_full, 95, axis=0)
 q95_valid = np.isfinite(q95_grid)
 del ms_full  # full time-series only needed for percentile
-ms_s1_da = select_period_apr_oct(ms_eur, '1980-01-01', '2020-12-31')
+ms_s1_da = select_period_apr_oct(ms_eur, '2001-01-01', '2020-12-31')
 ms_s1    = ms_s1_da.values.astype(np.float32)
 ms_ds.close()
 
@@ -108,14 +82,15 @@ ms_s2 = ms_s1[t_s2_start:]   # numpy view
 t_s2  = t_s1[t_s2_start:]
 
 print("Loading FLUXCOM ...")
-fc_ds   = xr.open_dataset(FLUXCOM_FILE)
+fc_ds   = xr.open_dataset(input_path(FLUXCOM_FILE), chunks={})
 fc_land = fc_ds["land_fraction"].values >= 0.5
 fc_s3_da = select_period_apr_oct(fc_ds['ET'], '2001-01-01', '2020-12-31')
+validate_alignment(gl_s1_da, ms_s1_da, fc_s3_da)
 t_s3     = pd.DatetimeIndex(fc_s3_da.time.values)
-fc_s3    = (fc_s3_da.values * 24).astype(np.float32)
+fc_s3    = (fc_s3_da.compute().values * 24).astype(np.float32)
 fc_ds.close()
 
-print(f"S1: {gl_s1.shape}  S2: {gl_s2.shape}  S3: {fc_s3.shape} (Apr-Oct only)")
+print(f"S2: {gl_s2.shape}  S3: {fc_s3.shape} (Apr-Oct only)")
 
 
 # ── Grid index mapping ────────────────────────────────────────────────────────
@@ -138,7 +113,6 @@ print(f"Cells in bounds: {len(eur)}")
 # ── Run scenarios ─────────────────────────────────────────────────────────────
 
 for sc_label, et_grid, times_pd, ms_grid in [
-    ("S1", gl_s1, t_s1, ms_s1),
     ("S2", gl_s2, t_s2, ms_s2),
     ("S3", fc_s3, t_s3, ms_s2),
 ]:
@@ -193,10 +167,10 @@ def build_grid_lc(col, lc):
     grid[i_lat[mask], i_lon[mask]] = eur.loc[mask, col].values
     return grid
 
-# Layout: 3 map columns + narrow colorbar column
+# Layout: two map columns + narrow colorbar column
 fig = plt.figure(figsize=(17, 5.5))
-gs  = fig.add_gridspec(1, 4, width_ratios=[1, 1, 1, 0.12], wspace=0.06)
-map_axes = [fig.add_subplot(gs[0, c]) for c in range(3)]
+gs  = fig.add_gridspec(1, 3, width_ratios=[1, 1, 0.12], wspace=0.06)
+map_axes = [fig.add_subplot(gs[0, c]) for c in range(2)]
 
 for ax, sc_key, sc_label in zip(map_axes, SC_KEYS, SC_LABELS):
     for lc, lc_color in zip(LC_TYPES, LC_COLORS):
@@ -216,7 +190,7 @@ for ax, sc_key, sc_label in zip(map_axes, SC_KEYS, SC_LABELS):
         ax.set_yticklabels([])
 
 # 6 stacked colorbars in the last column
-cbar_gs = gs[0, 3].subgridspec(len(LC_TYPES), 1, hspace=1.2)
+cbar_gs = gs[0, 2].subgridspec(len(LC_TYPES), 1, hspace=1.2)
 for i, (lc, lc_color, norm) in enumerate(zip(LC_TYPES, LC_COLORS, lc_norms.values())):
     cax = fig.add_subplot(cbar_gs[i])
     cmap_lc = mcolors.LinearSegmentedColormap.from_list(lc, ['#f5f5f5', lc_color])
@@ -227,5 +201,5 @@ for i, (lc, lc_color, norm) in enumerate(zip(LC_TYPES, LC_COLORS, lc_norms.value
 
 fig.suptitle("% of q95 precipitation days falling during ExEvEs — Europe by land cover",
              fontsize=11, fontweight='bold', y=1.01)
-fig.savefig("exeves_europe_q95_map_lc.png", dpi=150, bbox_inches='tight')
+fig.savefig(output_path("exeves_europe_q95_map_lc.png"), dpi=150, bbox_inches='tight')
 print("\nSaved exeves_europe_q95_map_lc.png")

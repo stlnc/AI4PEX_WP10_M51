@@ -6,6 +6,8 @@ Outputs:
   compare_exeves_jaccard.png   – per-cell Jaccard overlap map
   compare_exeves_freq.png      – side-by-side ExEvE frequency spatial maps
 """
+from _paths import input_path, output_path
+from _alignment import validate_alignment
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -13,7 +15,7 @@ import matplotlib.pyplot as plt
 import warnings; warnings.filterwarnings('ignore')
 
 GLEAM_FILE   = "gleam_e_mm_med_198001_202412_025_daily.nc"
-FLUXCOM_FILE = "ET_2001_2021_025_daily_med.nc"
+FLUXCOM_FILE = "ET_2001_2020_025_daily_med.nc"
 
 
 # ── Reuse detection functions ────────────────────────────────────────────────
@@ -57,7 +59,7 @@ def detect_exeves(et, times_pd):
 # ── Load datasets ────────────────────────────────────────────────────────────
 
 print("Loading FLUXCOM ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE)
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE))
 land_2d  = fc_ds["land_fraction"].values >= 0.5
 ref_lat  = fc_ds.lat.values
 ref_lon  = fc_ds.lon.values
@@ -65,7 +67,7 @@ fc_et    = (fc_ds["ET"].values * 24).astype(np.float32)
 fc_times = pd.DatetimeIndex(fc_ds.time.values)
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_et    = gl_ds["E"].values.astype(np.float32)
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 
@@ -73,6 +75,7 @@ gl_times = pd.DatetimeIndex(gl_ds.time.values)
 t0, t1 = "2001-01-01", "2020-12-31"
 gl_idx = np.where((gl_times >= pd.Timestamp(t0)) & (gl_times <= pd.Timestamp(t1)))[0]
 fc_idx = np.where((fc_times >= pd.Timestamp(t0)) & (fc_times <= pd.Timestamp(t1)))[0]
+validate_alignment(gl_ds.isel(time=gl_idx), fc_ds.isel(time=fc_idx))
 
 gl_sub    = gl_et[gl_idx]
 fc_sub    = fc_et[fc_idx]
@@ -127,7 +130,7 @@ ax1.set_title("Monthly ExEvE frequency — GLEAM vs FLUXCOM (2001–2020)", font
 ax1.legend()
 ax1.grid(axis='y', alpha=0.3)
 fig1.tight_layout()
-fig1.savefig("compare_exeves_seasonal.png", dpi=150, bbox_inches="tight")
+fig1.savefig(output_path("compare_exeves_seasonal.png"), dpi=150, bbox_inches="tight")
 print("Saved compare_exeves_seasonal.png")
 
 
@@ -156,7 +159,7 @@ ax2.text(0.02, 0.05, f"Median Jaccard = {med_j:.3f}",
          transform=ax2.transAxes, fontsize=10,
          bbox=dict(boxstyle="round", fc="white", alpha=0.8))
 fig2.tight_layout()
-fig2.savefig("compare_exeves_jaccard.png", dpi=150, bbox_inches="tight")
+fig2.savefig(output_path("compare_exeves_jaccard.png"), dpi=150, bbox_inches="tight")
 print("Saved compare_exeves_jaccard.png")
 
 
@@ -180,7 +183,7 @@ ax3b.set_xlabel("Longitude"); ax3b.set_ylabel("Latitude")
 
 fig3.suptitle("ExEvE frequency as % of all days (2001–2020)", fontsize=12, fontweight="bold")
 fig3.tight_layout()
-fig3.savefig("compare_exeves_freq.png", dpi=150, bbox_inches="tight")
+fig3.savefig(output_path("compare_exeves_freq.png"), dpi=150, bbox_inches="tight")
 print("Saved compare_exeves_freq.png")
 
 print("\nAll done.")

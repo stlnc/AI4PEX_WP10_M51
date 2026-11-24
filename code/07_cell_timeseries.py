@@ -1,3 +1,5 @@
+from _paths import input_path, output_path
+from _alignment import validate_alignment
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -6,7 +8,7 @@ import matplotlib.patches as mpatches
 import warnings; warnings.filterwarnings('ignore')
 
 GLEAM_FILE   = "gleam_e_mm_med_198001_202412_025_daily.nc"
-FLUXCOM_FILE = "ET_2001_2021_025_daily_med.nc"
+FLUXCOM_FILE = "ET_2001_2020_025_daily_med.nc"
 MSWEP_FILE   = "mswep-v2-8_tp_mm_med_197901_202012_025_daily.nc"
 
 
@@ -43,18 +45,18 @@ def detect_exeves(et, times_pd):
 # ── Load ─────────────────────────────────────────────────────────────────────
 
 print("Loading ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE)
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE))
 land_2d  = fc_ds["land_fraction"].values >= 0.5
 ref_lat  = fc_ds.lat.values
 ref_lon  = fc_ds.lon.values
 fc_et    = (fc_ds["ET"].values * 24).astype(np.float32)
 fc_times = pd.DatetimeIndex(fc_ds.time.values)
 
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_et    = gl_ds["E"].values.astype(np.float32)
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 
-ms_ds    = xr.open_dataset(MSWEP_FILE)
+ms_ds    = xr.open_dataset(input_path(MSWEP_FILE))
 ms_np    = ms_ds["mask"].values.astype(np.float32)
 ms_times = pd.DatetimeIndex(ms_ds.time.values)
 
@@ -62,14 +64,15 @@ t0, t1 = "2001-01-01", "2020-12-31"
 fc_idx = np.where((fc_times >= pd.Timestamp(t0)) & (fc_times <= pd.Timestamp(t1)))[0]
 gl_idx = np.where((gl_times >= pd.Timestamp(t0)) & (gl_times <= pd.Timestamp(t1)))[0]
 ms_idx = np.where((ms_times >= pd.Timestamp(t0)) & (ms_times <= pd.Timestamp(t1)))[0]
+validate_alignment(fc_ds.isel(time=fc_idx), gl_ds.isel(time=gl_idx), ms_ds.isel(time=ms_idx))
 
 fc_sub = fc_et[fc_idx]
 gl_sub = gl_et[gl_idx]
 ms_sub = ms_np[ms_idx]
 dates  = pd.DatetimeIndex(fc_times[fc_idx])
 
-# q95 threshold from full MSWEP record
-q95_vals = np.nanpercentile(ms_np, 95, axis=0)
+# q95 threshold from the analysis period
+q95_vals = np.nanpercentile(ms_sub, 95, axis=0)
 q95m     = ms_sub >= q95_vals[np.newaxis]
 
 gl_valid = ~np.all(np.isnan(gl_sub), axis=0)
@@ -78,7 +81,7 @@ valid = land_2d & gl_valid & fc_valid
 
 # ── Pick a random valid cell ──────────────────────────────────────────────────
 
-rng = np.random.default_rng()   # new random seed each run
+rng = np.random.default_rng(42)   # fixed seed for reproducibility
 valid_idx = np.argwhere(valid)               # shape (N_valid, 2)
 ci, cj = valid_idx[rng.integers(len(valid_idx))]
 lat_c, lon_c = ref_lat[ci], ref_lon[cj]
@@ -157,5 +160,5 @@ axes[0].legend(handles=[
 axes[-1].set_xlabel("Date")
 fig.text(0.005, 0.5, "ET (mm day⁻¹)", va="center", rotation="vertical", fontsize=9)
 fig.tight_layout(rect=[0.02, 0, 1, 0.97])
-fig.savefig("cell_timeseries.png", dpi=150, bbox_inches="tight")
+fig.savefig(output_path("cell_timeseries.png"), dpi=150, bbox_inches="tight")
 print("Saved cell_timeseries.png")

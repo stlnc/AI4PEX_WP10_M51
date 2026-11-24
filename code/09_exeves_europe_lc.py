@@ -1,7 +1,6 @@
 """
 ExEvEs analysis by land cover type for Europe (EUROPE + EUROPE-AFRICA).
-Three scenarios per land cover subplot:
-  S1: GLEAM 1980–2020
+Two scenarios per land cover subplot:
   S2: GLEAM 2001–2020
   S3: FLUXCOM 2001–2020
 
@@ -9,6 +8,9 @@ Outputs:
   exeves_europe_pct.png  – % ExEvE days of total days
   exeves_europe_q95.png  – % q95 days falling during ExEvEs
 """
+from _analysis import pentad_zscore
+from _alignment import validate_alignment
+from _paths import input_path, output_path
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -17,31 +19,19 @@ from scipy.stats import gaussian_kde
 import pyreadr
 import warnings; warnings.filterwarnings('ignore')
 
-GLEAM_FILE   = "gleam_e_mm_land_198001_202412_025_daily.nc"
+GLEAM_FILE   = "gleam_e_mm_eur_2001_2020_025_daily.nc"
 FLUXCOM_FILE = "ET_2001_2020_025_daily_eur.nc"
-MSWEP_FILE   = "mswep-v2-8_tp_mm_land_197901_202012_025_daily.nc"
+MSWEP_FILE   = "mswep-v2-8_tp_mm_eur_2001_2020_025_daily.nc"
 MASKS_FILE   = "masks.rda"
 
 LC_TYPES  = ["Forests", "Croplands", "Savannas", "Grasslands", "Shrublands", "Barren"]
 LC_COLORS = ["forestgreen", "goldenrod", "peru", "yellowgreen", "sienna", "lightgray"]
 
-SC_LABELS = ["GLEAM 1980–2020", "GLEAM 2001–2020", "FLUXCOM 2001–2020"]
-SC_COLORS = ["steelblue", "seagreen", "darkorange"]
+SC_LABELS = ["GLEAM 2001–2020", "FLUXCOM 2001–2020"]
+SC_COLORS = ["seagreen", "darkorange"]
 
 
 # ── Detection functions (T, N) ────────────────────────────────────────────────
-
-def pentad_zscore(et, times_pd):
-    T, N = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any(): continue
-        v  = et[idx]
-        mu = np.nanmean(v, axis=0); sg = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
 
 
 def detect_exeves(et, times_pd):
@@ -64,7 +54,7 @@ def detect_exeves(et, times_pd):
 # ── Load masks ────────────────────────────────────────────────────────────────
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 eur = masks[
     masks['ipcc_continent'].isin(['EUROPE', 'EUROPE-AFRICA']) &
     (masks['land_mask'] == 'land') &
@@ -76,17 +66,17 @@ print(f"  Target cells: {len(eur)}")
 # ── Load datasets ─────────────────────────────────────────────────────────────
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 
 print("Loading FLUXCOM ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE)
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE))
 fc_times = pd.DatetimeIndex(fc_ds.time.values)
 # land_fraction from FLUXCOM (already on European grid)
 fc_land  = fc_ds["land_fraction"].values >= 0.5
 
 print("Loading MSWEP ...")
-ms_ds    = xr.open_dataset(MSWEP_FILE)
+ms_ds    = xr.open_dataset(input_path(MSWEP_FILE))
 
 # European bounding box (from masks extent)
 lat_min = eur.lat.min() - 0.5;  lat_max = eur.lat.max() + 0.5
@@ -97,8 +87,9 @@ gl_ref = gl_ds['E'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)
 eur_lats = gl_ref.lat.values   # descending
 eur_lons = gl_ref.lon.values   # ascending
 
-# MSWEP full record for q95 threshold
+# MSWEP analysis period for q95 threshold
 ms_full = ms_ds['mask'].sel(
+    time=slice('2001-01-01', '2020-12-31'),
     lat=slice(lat_max, lat_min),
     lon=slice(lon_min, lon_max)).values.astype(np.float32)
 q95_grid  = np.nanpercentile(ms_full, 95, axis=0)
@@ -108,20 +99,21 @@ def load_period(da, t0, t1):
     return da.sel(time=slice(t0, t1)).values.astype(np.float32)
 
 # Load time slices
-gl_s1 = load_period(gl_ref, '1980-01-01', '2020-12-31')
 gl_s2 = load_period(gl_ref, '2001-01-01', '2020-12-31')
-ms_s1 = load_period(ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
-                    '1980-01-01', '2020-12-31')
 ms_s2 = load_period(ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
                     '2001-01-01', '2020-12-31')
 
 fc_s3 = (fc_ds['ET'].sel(time=slice('2001-01-01', '2020-12-31')).values * 24).astype(np.float32)
 
-t_s1 = pd.DatetimeIndex(gl_ds.time.sel(time=slice('1980-01-01', '2020-12-31')).values)
 t_s2 = pd.DatetimeIndex(gl_ds.time.sel(time=slice('2001-01-01', '2020-12-31')).values)
 t_s3 = pd.DatetimeIndex(fc_ds.time.sel(time=slice('2001-01-01', '2020-12-31')).values)
+validate_alignment(
+    gl_ref.sel(time=slice('2001-01-01', '2020-12-31')),
+    ms_ds['mask'].sel(time=slice('2001-01-01', '2020-12-31'), lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
+    fc_ds['ET'].sel(time=slice('2001-01-01', '2020-12-31')),
+)
 
-print(f"S1: {gl_s1.shape}  S2: {gl_s2.shape}  S3: {fc_s3.shape}")
+print(f"S2: {gl_s2.shape}  S3: {fc_s3.shape}")
 
 
 # ── Map mask cells to grid indices ────────────────────────────────────────────
@@ -144,7 +136,6 @@ print(f"Cells in bounds: {len(eur)}")
 # ── Run scenarios ─────────────────────────────────────────────────────────────
 
 scenarios = [
-    ("S1", gl_s1, t_s1, ms_s1),
     ("S2", gl_s2, t_s2, ms_s2),
     ("S3", fc_s3, t_s3, ms_s2),
 ]
@@ -186,7 +177,7 @@ def make_figure(col_prefix, suptitle, xlabel, xlim, fname):
 
     for ax, lc, lc_color in zip(axes, LC_TYPES, LC_COLORS):
         sub = eur[eur['land_cover_short_class'] == lc]
-        for sc_key, sc_label, sc_color in zip(['S1','S2','S3'], SC_LABELS, SC_COLORS):
+        for sc_key, sc_label, sc_color in zip(['S2','S3'], SC_LABELS, SC_COLORS):
             col = f'{col_prefix}_{sc_key}'
             v = sub[col].values
             v = v[np.isfinite(v) & (v >= xlim[0]) & (v <= xlim[1])]
@@ -210,7 +201,7 @@ def make_figure(col_prefix, suptitle, xlabel, xlim, fname):
 
     fig.suptitle(suptitle, fontsize=13, fontweight='bold')
     fig.tight_layout()
-    fig.savefig(fname, dpi=150, bbox_inches='tight')
+    fig.savefig(output_path(fname), dpi=150, bbox_inches='tight')
     print(f"Saved {fname}")
 
 

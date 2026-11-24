@@ -1,5 +1,5 @@
 """
-Global ExEvEs analysis for a user-selected land cover type.
+Historical global ExEvEs analysis, outside the active workflow.
 Optimised for machines with large RAM: sequential year-by-year I/O,
 numpy fancy indexing in RAM, parallel ExEvE detection.
 
@@ -11,6 +11,8 @@ Set LC_CHOICE below:
   1 = Croplands  2 = Forests  3 = Savannas
   4 = Grasslands  5 = Shrublands  6 = Barren
 """
+from _analysis import pentad_zscore
+from _paths import input_path, output_path
 
 # ── User config ───────────────────────────────────────────────────────────────
 LC_CHOICE  = 4
@@ -97,18 +99,6 @@ def load_cells_fast(da, t0, t1, i_lat, i_lon, label=""):
 
 # ── Detection (fully vectorised — no per-cell Python loop) ────────────────────
 
-def pentad_zscore(et, times_pd):
-    T, N = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any(): continue
-        v  = et[idx]
-        mu = np.nanmean(v, axis=0); sg = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
-
 
 def detect_exeves(et, times_pd):
     """Vectorised via cumsum run-labeling + bincount — no per-cell loop."""
@@ -160,7 +150,7 @@ print(f"Analysis: {LC_TYPE} — Global")
 print("─" * 55)
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 cells = masks[
     (masks['land_mask'] == 'land') &
     (masks['land_cover_short_class'] == LC_TYPE)
@@ -171,11 +161,11 @@ print(f"  {LC_TYPE} cells globally: {len(cells)}")
 # ── Open datasets (no dask — we do manual time batching) ─────────────────────
 
 print("\nOpening datasets ...")
-gl_ds = xr.open_dataset(GLEAM_FILE)
-ms_ds = xr.open_dataset(MSWEP_FILE)
+gl_ds = xr.open_dataset(input_path(GLEAM_FILE))
+ms_ds = xr.open_dataset(input_path(MSWEP_FILE))
 
 try:
-    fc_ds = xr.open_dataset(FLUXCOM_GLOBAL)
+    fc_ds = xr.open_dataset(input_path(FLUXCOM_GLOBAL))
     has_fluxcom = True
     print("  FLUXCOM found")
 except FileNotFoundError:
@@ -304,7 +294,7 @@ ax.set_title(f"{LC_TYPE}: % q95 days during ExEvEs — Global", fontsize=12, fon
 ax.legend(fontsize=9);  ax.grid(axis='y', alpha=0.3)
 fig.tight_layout()
 fname = f"exeves_{LC_SLUG}_pct_q95_density.png"
-fig.savefig(fname, dpi=150, bbox_inches='tight')
+fig.savefig(output_path(fname), dpi=150, bbox_inches='tight')
 print(f"  Saved {fname}")
 
 
@@ -337,7 +327,7 @@ fig.suptitle(f"{LC_TYPE}: % of q95 days during ExEvEs — Global",
              fontsize=12, fontweight='bold', y=1.01)
 fig.tight_layout()
 fname = f"exeves_{LC_SLUG}_pct_q95_map.png"
-fig.savefig(fname, dpi=150, bbox_inches='tight')
+fig.savefig(output_path(fname), dpi=150, bbox_inches='tight')
 print(f"  Saved {fname}")
 
 print(f"\nTotal runtime: {(time.time()-t_total)/60:.1f} min")

@@ -1,5 +1,5 @@
 # External data
 
-Keep raw and processed datasets outside Git. See `../../docs/data.md` for
-expected filenames and the main README for how to run scripts against a
-separate working directory.
+Keep raw and processed datasets outside Git. See [data notes](../../docs/data.md)
+for expected filenames, public availability, checksums and unresolved access
+requirements, and the [main README](../../README.md) for running scripts.

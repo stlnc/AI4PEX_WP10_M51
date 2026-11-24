@@ -7,7 +7,7 @@ def main():
     parser.add_argument('flux', help='variable name, either: NEE, GPP, ET, ET_T')
     parser.add_argument('resolution', help='resolution string, either: 050_monthly, 025_monthlycycle, 025_daily, 005_monthly')
     parser.add_argument('-s', '--startyear', default=2001, type=int, help='Starting year (inclusive)')
-    parser.add_argument('-e', '--endyear', default=2021, type=int, help='Ending year (inclusive)')
+    parser.add_argument('-e', '--endyear', default=2020, type=int, help='Ending year (inclusive)')
     parser.add_argument('-o', '--outdir', default='./basex_data/', type=str, help='Output directory for downloaded files')
     args = parser.parse_args()
     return args
@@ -1038,6 +1038,6 @@ def download_from_icos(flux, resolution, start_year, end_year, saveloc):
     
     
 if __name__ == "__main__":
-    auth.init_config_file()
     args = main()
+    auth.init_config_file()
     download_from_icos(args.flux, args.resolution, args.startyear, args.endyear, args.outdir)

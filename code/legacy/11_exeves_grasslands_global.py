@@ -1,8 +1,10 @@
 """
-Global ExEvEs analysis for Grasslands land cover type.
+Historical global ExEvEs analysis for Grasslands, outside the active workflow.
 % of q95 precipitation days falling within ExEvEs.
 Output: exeves_grasslands_pct_q95_density.png, exeves_grasslands_pct_q95_map.png
 """
+from _analysis import pentad_zscore
+from _paths import input_path, output_path
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -23,18 +25,6 @@ SC_COLORS = ["steelblue", "seagreen", "darkorange"]
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
-
-def pentad_zscore(et, times_pd):
-    T, N = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any(): continue
-        v = et[idx]
-        mu = np.nanmean(v, axis=0); sg = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
 
 
 def detect_exeves(et, times_pd):
@@ -57,7 +47,7 @@ def detect_exeves(et, times_pd):
 # ── Load masks ────────────────────────────────────────────────────────────────
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 grass = masks[
     (masks['land_mask'] == 'land') &
     (masks['land_cover_short_class'] == LC_TYPE)
@@ -68,17 +58,17 @@ print(f"  Global {LC_TYPE} cells: {len(grass)}")
 # ── Load datasets ─────────────────────────────────────────────────────────────
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE, chunks={'time': 365, 'lat': 180, 'lon': 180})
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE), chunks={'time': 365, 'lat': 180, 'lon': 180})
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 eur_lats = gl_ds['lat'].values  # Global GLEAM grid
 eur_lons = gl_ds['lon'].values
 
 print("Loading MSWEP ...")
-ms_ds = xr.open_dataset(MSWEP_FILE, chunks={'time': 365, 'lat': 180, 'lon': 180})
+ms_ds = xr.open_dataset(input_path(MSWEP_FILE), chunks={'time': 365, 'lat': 180, 'lon': 180})
 
 # For FLUXCOM: check if global file exists, else warn
 try:
-    fc_ds = xr.open_dataset("ET_2001_2020_025_daily.nc")  # Global FLUXCOM
+    fc_ds = xr.open_dataset(input_path("ET_2001_2020_025_daily.nc"))  # Global FLUXCOM
     fc_times = pd.DatetimeIndex(fc_ds.time.values)
     has_fluxcom = True
 except FileNotFoundError:
@@ -193,7 +183,7 @@ ax.set_title(f"{LC_TYPE}: % q95 days during ExEvEs — Global", fontsize=12, fon
 ax.legend(fontsize=9, loc='upper right')
 ax.grid(axis='y', alpha=0.3)
 fig.tight_layout()
-fig.savefig("exeves_grasslands_pct_q95_density.png", dpi=150, bbox_inches='tight')
+fig.savefig(output_path("exeves_grasslands_pct_q95_density.png"), dpi=150, bbox_inches='tight')
 print("\nSaved exeves_grasslands_pct_q95_density.png")
 
 
@@ -243,7 +233,7 @@ cbar.ax.tick_params(labelsize=8)
 fig.suptitle(f"{LC_TYPE}: % of q95 precipitation days falling during ExEvEs — Global",
              fontsize=12, fontweight='bold', y=1.01)
 fig.tight_layout()
-fig.savefig("exeves_grasslands_pct_q95_map.png", dpi=150, bbox_inches='tight')
+fig.savefig(output_path("exeves_grasslands_pct_q95_map.png"), dpi=150, bbox_inches='tight')
 print("Saved exeves_grasslands_pct_q95_map.png")
 
 print("\nAll done.")

@@ -13,6 +13,10 @@ Plot (6 panels): per-cell scatter coloured by config + bold mean marker per conf
   circles = GLEAM 2001–2020   triangles = FLUXCOM 2001–2020
 Output: exeves_europe_jaccard_vs_freq_alllc.png
 """
+from _analysis import pentad_zscore
+from _alignment import validate_alignment
+from _figure_style import EUROPE_LAND_COVER_COLORS
+from _paths import input_path, output_path
 import os
 import multiprocessing
 import warnings
@@ -29,13 +33,13 @@ from concurrent.futures import ProcessPoolExecutor
 multiprocessing.set_start_method('fork', force=True)
 warnings.filterwarnings('ignore')
 
-GLEAM_FILE   = "gleam_e_mm_land_198001_202412_025_daily.nc"
+GLEAM_FILE   = "gleam_e_mm_eur_2001_2020_025_daily.nc"
 FLUXCOM_FILE = "ET_2001_2020_025_daily_eur.nc"
-MSWEP_FILE   = "mswep-v2-8_tp_mm_land_197901_202012_025_daily.nc"
+MSWEP_FILE   = "mswep-v2-8_tp_mm_eur_2001_2020_025_daily.nc"
 MASKS_FILE   = "masks.rda"
 
 LC_TYPES  = ["Forests", "Croplands", "Savannas", "Grasslands", "Shrublands"]
-LC_COLORS = ["#E69F00", "#56B4E9", "#009E73", "#F0E442", "#D55E00"]
+LC_COLORS = list(EUROPE_LAND_COVER_COLORS[:5])
 
 SEASON_MONTHS = [4, 5, 6, 7, 8, 9, 10]
 
@@ -58,20 +62,6 @@ print(f"Using {N_WORKERS} parallel workers")
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
-
-def pentad_zscore(et, times_pd):
-    T, N   = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z      = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any():
-            continue
-        v      = et[idx]
-        mu     = np.nanmean(v, axis=0)
-        sg     = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
 
 
 _z_shared = None   # inherited by forked workers via CoW
@@ -113,7 +103,7 @@ def detect_from_z_parallel(z, p_above, p_extreme):
 # ── Load masks ────────────────────────────────────────────────────────────────
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 eur = masks[
     masks['ipcc_continent'].isin(['EUROPE', 'EUROPE-AFRICA']) &
     (masks['land_mask'] == 'land') &
@@ -134,11 +124,11 @@ def select_period_apr_oct(da, t0, t1):
 # ── Load GLEAM ────────────────────────────────────────────────────────────────
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_ref   = gl_ds['E'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
 eur_lats = gl_ref.lat.values
 eur_lons = gl_ref.lon.values
-gl_s1_da = select_period_apr_oct(gl_ref, '1980-01-01', '2020-12-31')
+gl_s1_da = select_period_apr_oct(gl_ref, '2001-01-01', '2020-12-31')
 gl_s1    = gl_s1_da.values.astype(np.float32)
 t_s1     = pd.DatetimeIndex(gl_s1_da.time.values)
 gl_ds.close()
@@ -152,10 +142,10 @@ del gl_s1
 # ── Load MSWEP — validity mask only (no precipitation threshold needed) ───────
 
 print("Loading MSWEP (validity mask) ...")
-ms_ds   = xr.open_dataset(MSWEP_FILE)
-ms_eur  = ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
-ms_full = ms_eur.where(ms_eur.time.dt.month.isin(SEASON_MONTHS),
-                       drop=True).values.astype(np.float32)
+ms_ds   = xr.open_dataset(input_path(MSWEP_FILE))
+ms_eur  = ms_ds['mask'].sel(time=slice('2001-01-01', '2020-12-31'), lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max))
+ms_s1_da = select_period_apr_oct(ms_eur, '2001-01-01', '2020-12-31')
+ms_full = ms_s1_da.values.astype(np.float32)
 ms_full[ms_full <= 0] = np.nan
 q95_valid = np.isfinite(np.nanpercentile(ms_full, 95, axis=0))
 del ms_full
@@ -165,9 +155,10 @@ ms_ds.close()
 # ── Load FLUXCOM ─────────────────────────────────────────────────────────────
 
 print("Loading FLUXCOM (dask-chunked) ...")
-fc_ds    = xr.open_dataset(FLUXCOM_FILE, chunks={'time': 100})
+fc_ds    = xr.open_dataset(input_path(FLUXCOM_FILE), chunks={})
 fc_land  = (fc_ds["land_fraction"].values >= 0.5)
 fc_s3_da = select_period_apr_oct(fc_ds['ET'], '2001-01-01', '2020-12-31')
+validate_alignment(gl_s1_da, ms_s1_da, fc_s3_da)
 t_s3     = pd.DatetimeIndex(fc_s3_da.time.values)
 fc_s3    = (fc_s3_da.compute().values * 24).astype(np.float32)
 fc_ds.close()
@@ -373,6 +364,6 @@ fig.suptitle(
     fontsize=12, fontweight='bold', y=1.02,
 )
 fig.tight_layout()
-fig.savefig("exeves_europe_jaccard_vs_freq_alllc.png",
+fig.savefig(output_path("exeves_europe_jaccard_vs_freq_alllc.png"),
             dpi=150, bbox_inches='tight')
 print("\nSaved exeves_europe_jaccard_vs_freq_alllc.png")

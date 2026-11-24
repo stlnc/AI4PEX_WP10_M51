@@ -1,8 +1,11 @@
 """
 Spatial maps of % q95 days falling during ExEvEs — Europe land cover cells.
-Three panels: GLEAM 1980–2020, GLEAM 2001–2020, FLUXCOM 2001–2020.
+Two panels: GLEAM 2001–2020 and FLUXCOM 2001–2020.
 Output: exeves_europe_q95_map.png
 """
+from _analysis import pentad_zscore
+from _alignment import validate_alignment
+from _paths import input_path, output_path
 import numpy as np
 import xarray as xr
 import pandas as pd
@@ -11,30 +14,18 @@ import matplotlib.colors as mcolors
 import pyreadr
 import warnings; warnings.filterwarnings('ignore')
 
-GLEAM_FILE   = "gleam_e_mm_land_198001_202412_025_daily.nc"
+GLEAM_FILE   = "gleam_e_mm_eur_2001_2020_025_daily.nc"
 FLUXCOM_FILE = "ET_2001_2020_025_daily_eur.nc"
-MSWEP_FILE   = "mswep-v2-8_tp_mm_land_197901_202012_025_daily.nc"
+MSWEP_FILE   = "mswep-v2-8_tp_mm_eur_2001_2020_025_daily.nc"
 MASKS_FILE   = "masks.rda"
 
 LC_TYPES = ["Forests", "Croplands", "Savannas", "Grasslands", "Shrublands", "Barren"]
 
-SC_LABELS = ["GLEAM 1980–2020", "GLEAM 2001–2020", "FLUXCOM 2001–2020"]
-SC_COLORS = ["steelblue", "seagreen", "darkorange"]
+SC_LABELS = ["GLEAM 2001–2020", "FLUXCOM 2001–2020"]
+SC_COLORS = ["seagreen", "darkorange"]
 
 
 # ── Detection ─────────────────────────────────────────────────────────────────
-
-def pentad_zscore(et, times_pd):
-    T, N = et.shape
-    pentad = np.minimum((times_pd.dayofyear.values - 1) // 5, 72)
-    z = np.full_like(et, np.nan, dtype=np.float32)
-    for p in range(73):
-        idx = pentad == p
-        if not idx.any(): continue
-        v = et[idx]
-        mu = np.nanmean(v, axis=0); sg = np.nanstd(v, axis=0)
-        z[idx] = (v - mu) / np.where(sg > 0, sg, np.nan)
-    return z
 
 
 def detect_exeves(et, times_pd):
@@ -57,7 +48,7 @@ def detect_exeves(et, times_pd):
 # ── Load masks ────────────────────────────────────────────────────────────────
 
 print("Loading masks ...")
-masks = pyreadr.read_r(MASKS_FILE)['masks']
+masks = pyreadr.read_r(str(input_path(MASKS_FILE)))['masks']
 eur = masks[
     masks['ipcc_continent'].isin(['EUROPE', 'EUROPE-AFRICA']) &
     (masks['land_mask'] == 'land') &
@@ -69,15 +60,15 @@ print(f"  Target cells: {len(eur)}")
 # ── Load datasets ─────────────────────────────────────────────────────────────
 
 print("Loading GLEAM ...")
-gl_ds    = xr.open_dataset(GLEAM_FILE)
+gl_ds    = xr.open_dataset(input_path(GLEAM_FILE))
 gl_times = pd.DatetimeIndex(gl_ds.time.values)
 
 print("Loading FLUXCOM ...")
-fc_ds   = xr.open_dataset(FLUXCOM_FILE)
+fc_ds   = xr.open_dataset(input_path(FLUXCOM_FILE))
 fc_land = fc_ds["land_fraction"].values >= 0.5
 
 print("Loading MSWEP ...")
-ms_ds = xr.open_dataset(MSWEP_FILE)
+ms_ds = xr.open_dataset(input_path(MSWEP_FILE))
 
 lat_min = eur.lat.min() - 0.5;  lat_max = eur.lat.max() + 0.5
 lon_min = eur.lon.min() - 0.5;  lon_max = eur.lon.max() + 0.5
@@ -87,6 +78,7 @@ eur_lats = gl_ref.lat.values
 eur_lons = gl_ref.lon.values
 
 ms_full  = ms_ds['mask'].sel(
+    time=slice('2001-01-01', '2020-12-31'),
     lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)).values.astype(np.float32)
 q95_grid  = np.nanpercentile(ms_full, 95, axis=0)
 q95_valid = q95_grid > 0.1
@@ -94,19 +86,20 @@ q95_valid = q95_grid > 0.1
 def load_period(da, t0, t1):
     return da.sel(time=slice(t0, t1)).values.astype(np.float32)
 
-gl_s1 = load_period(gl_ref, '1980-01-01', '2020-12-31')
 gl_s2 = load_period(gl_ref, '2001-01-01', '2020-12-31')
-ms_s1 = load_period(ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
-                    '1980-01-01', '2020-12-31')
 ms_s2 = load_period(ms_ds['mask'].sel(lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
                     '2001-01-01', '2020-12-31')
 fc_s3 = (fc_ds['ET'].sel(time=slice('2001-01-01', '2020-12-31')).values * 24).astype(np.float32)
 
-t_s1 = pd.DatetimeIndex(gl_ds.time.sel(time=slice('1980-01-01', '2020-12-31')).values)
 t_s2 = pd.DatetimeIndex(gl_ds.time.sel(time=slice('2001-01-01', '2020-12-31')).values)
 t_s3 = pd.DatetimeIndex(fc_ds.time.sel(time=slice('2001-01-01', '2020-12-31')).values)
+validate_alignment(
+    gl_ref.sel(time=slice('2001-01-01', '2020-12-31')),
+    ms_ds['mask'].sel(time=slice('2001-01-01', '2020-12-31'), lat=slice(lat_max, lat_min), lon=slice(lon_min, lon_max)),
+    fc_ds['ET'].sel(time=slice('2001-01-01', '2020-12-31')),
+)
 
-print(f"S1: {gl_s1.shape}  S2: {gl_s2.shape}  S3: {fc_s3.shape}")
+print(f"S2: {gl_s2.shape}  S3: {fc_s3.shape}")
 
 
 # ── Grid index mapping ────────────────────────────────────────────────────────
@@ -129,7 +122,6 @@ print(f"Cells in bounds: {len(eur)}")
 # ── Run scenarios ─────────────────────────────────────────────────────────────
 
 scenarios = [
-    ("S1", gl_s1, t_s1, ms_s1),
     ("S2", gl_s2, t_s2, ms_s2),
     ("S3", fc_s3, t_s3, ms_s2),
 ]
@@ -177,7 +169,7 @@ LON, LAT  = np.meshgrid(lon_edges, lat_edges)
 geo_aspect = 1.0 / np.cos(np.radians(50))
 
 cmap = plt.cm.YlOrRd
-SC_KEYS = ['S1', 'S2', 'S3']
+SC_KEYS = ['S2', 'S3']
 
 # Per-LC vmax: 99th percentile of values across all scenarios
 lc_vmax = {}
@@ -235,5 +227,5 @@ for r, lc in enumerate(LC_TYPES):
 
 fig.suptitle("% of q95 precipitation days falling during ExEvEs — Europe by land cover",
              fontsize=12, fontweight='bold', y=1.002)
-fig.savefig("exeves_europe_q95_map.png", dpi=150, bbox_inches='tight')
+fig.savefig(output_path("exeves_europe_q95_map.png"), dpi=150, bbox_inches='tight')
 print("\nSaved exeves_europe_q95_map.png")
